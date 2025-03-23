@@ -8,6 +8,28 @@ import time
 import os
 import pyperclip
 import urllib.parse
+from pymongo import MongoClient
+from datetime import datetime
+
+# MongoDB connection setup
+print("Connecting to MongoDB...")
+try:
+    # Connect to MongoDB (default localhost:27017)
+    client = MongoClient('mongodb://localhost:27017/')
+    
+    # Create or access database
+    db = client['linkedin_scraper']
+    
+    # Create or access collection for post links
+    posts_collection = db['post_links']
+    
+    # Create unique index on URL to prevent duplicates
+    posts_collection.create_index("url", unique=True)
+    
+    print(f"Successfully connected to MongoDB database 'linkedin_scraper'")
+except Exception as e:
+    print(f"Error connecting to MongoDB: {e}")
+    exit(1)
 
 def read_search_terms(file_path):
     """Read search terms from a file, one per line"""
@@ -19,6 +41,37 @@ def read_search_terms(file_path):
     except Exception as e:
         print(f"Error reading search terms file: {e}")
         return ["flutter"]  # Default search term if file can't be read
+
+def save_to_mongodb(url, search_term):
+    """Save a post URL to MongoDB with metadata"""
+    try:
+        # Create document with metadata
+        post_document = {
+            "url": url,
+            "search_term": search_term,
+            "date_scraped": datetime.now(),
+            "processed": False  # For future processing flag
+        }
+        
+        # Insert into MongoDB collection (will fail silently if duplicate)
+        result = posts_collection.update_one(
+            {"url": url},
+            {"$set": post_document},
+            upsert=True
+        )
+        
+        if result.upserted_id:
+            print(f"Saved new URL to MongoDB with id: {result.upserted_id}")
+            return True
+        elif result.modified_count > 0:
+            print(f"Updated existing URL record in MongoDB")
+            return True
+        else:
+            print(f"URL already exists in MongoDB, no changes made")
+            return False
+    except Exception as e:
+        print(f"Error saving to MongoDB: {e}")
+        return False
 
 print("Script started - Setting up Chrome driver options...")
 
@@ -102,7 +155,7 @@ if "linkedin.com/feed" not in driver.current_url:
         exit(1)
 
 # Function to extract links for posts
-def extract_post_links(num_posts=5):
+def extract_post_links(num_posts=5, search_term=""):
     post_links = []
     collected_urls = set()  # Track URLs to avoid duplicates
     
@@ -193,9 +246,18 @@ def extract_post_links(num_posts=5):
                 print(f"Retrieved from clipboard: {post_url}")
                 
                 if "linkedin.com" in post_url and post_url not in collected_urls:
+                    # Save URL to local list
                     post_links.append(post_url)
                     collected_urls.add(post_url)
                     print(f"Successfully extracted URL for post {i+1}: {post_url}")
+                    
+                    # Save to MongoDB
+                    print(f"Saving post URL to MongoDB...")
+                    saved = save_to_mongodb(post_url, search_term)
+                    if saved:
+                        print(f"Successfully saved post URL to MongoDB")
+                    else:
+                        print(f"Failed to save post URL to MongoDB")
                 else:
                     if "linkedin.com" not in post_url:
                         print(f"Clipboard content does not contain a LinkedIn URL")
@@ -246,7 +308,7 @@ for term in search_terms:
     
     # Extract links for this search term
     print(f"\nStarting extraction of post links for '{term}'...")
-    term_links = extract_post_links(5)  # Extract 5 links per search term
+    term_links = extract_post_links(5, term)  # Pass the search term to the function
     
     # Store results for this term
     all_results[term] = term_links
@@ -276,6 +338,25 @@ try:
     print(f"\nResults saved to {results_file}")
 except Exception as e:
     print(f"Error saving results to file: {e}")
+
+# Print MongoDB stats before closing
+try:
+    doc_count = posts_collection.count_documents({})
+    print(f"\nTotal documents in MongoDB: {doc_count}")
+    
+    # Count by search term
+    pipeline = [
+        {"$group": {"_id": "$search_term", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}}
+    ]
+    term_counts = list(posts_collection.aggregate(pipeline))
+    
+    print("Documents by search term:")
+    for term_data in term_counts:
+        print(f"  {term_data['_id']}: {term_data['count']} links")
+        
+except Exception as e:
+    print(f"Error getting MongoDB stats: {e}")
 
 # Don't close the browser immediately
 input("\nScript complete. Press Enter to close the browser...")
