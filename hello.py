@@ -4,10 +4,9 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver import ActionChains
 import time
 import os
-import pyperclip 
+import pyperclip  # You'll need to install this: pip install pyperclip
 
 print("Script started - Setting up Chrome driver options...")
 
@@ -32,6 +31,7 @@ try:
 except Exception as e:
     print(f"Error initializing Chrome driver: {e}")
     exit(1)
+
 # Go directly to the LinkedIn login page
 try:
     print("Navigating to LinkedIn login page...")
@@ -107,187 +107,135 @@ except Exception as e:
     driver.quit()
     exit(1)
 
-# Function to extract links for posts - FIXED VERSION
+# Function to extract links for posts
 def extract_post_links(num_posts=5):
     post_links = []
-    collected_urls = set()  # Keep track of URLs we've already seen
     
     # Find all posts
     print(f"Searching for posts on the page...")
     try:
-        # Wait for the search results to load
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'search-results__cluster-content')]"))
+        posts = WebDriverWait(driver, 15).until(  # Increased timeout
+            EC.presence_of_all_elements_located((By.XPATH, "//div[contains(@class, 'feed-shared-update-v2') or contains(@class, 'search-content-card')]"))
         )
         
-        # Scroll down a bit to load more content
-        print("Scrolling to load more content...")
-        driver.execute_script("window.scrollBy(0, 500);")
-        time.sleep(3)
-        
-        # Use a more specific XPath for search result posts
-        post_containers = driver.find_elements(By.XPATH, "//div[contains(@class, 'search-content-card')]")
-        print(f"Found {len(post_containers)} post containers")
-        
-        # If no results with that class, try the alternative
-        if not post_containers:
-            post_containers = driver.find_elements(By.XPATH, "//div[contains(@class, 'feed-shared-update-v2')]")
-            print(f"Found {len(post_containers)} posts using alternative selector")
-        
-        # If we still don't have posts, try a more generic approach
-        if not post_containers:
-            post_containers = driver.find_elements(By.XPATH, "//div[contains(@data-id, 'urn:li:activity:')]")
-            print(f"Found {len(post_containers)} posts using data-id selector")
-            
-        print(f"Will process up to {min(num_posts, len(post_containers))} posts")
+        print(f"Found {len(posts)} posts, extracting links for first {min(num_posts, len(posts))} posts")
     except Exception as e:
         print(f"Error finding posts: {e}")
         return post_links
     
-    actions = ActionChains(driver)
-    processed_count = 0
-    index = 0
-    
-    # Process posts until we get the number we want or run out
-    while processed_count < num_posts and index < len(post_containers):
+    # Process only the first num_posts
+    for i, post in enumerate(posts[:num_posts]):
         try:
-            post = post_containers[index]
-            index += 1
-            print(f"\n--- Processing post {processed_count + 1}/{min(num_posts, len(post_containers))} ---")
+            print(f"\n--- Processing post {i+1}/{min(num_posts, len(posts))} ---")
             
-            # Scroll the post into center view
-            print(f"Scrolling post into center view...")
+            # Scroll post into view
+            print(f"Scrolling post {i+1} into view...")
             driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", post)
-            time.sleep(3)
+            time.sleep(3)  # Increased delay for scrolling
             
-            # Additional small scroll to adjust view
-            driver.execute_script("window.scrollBy(0, -50);")
-            time.sleep(1)
+            # Find three-dots menu button and click
+            print(f"Looking for three-dots menu on post {i+1}...")
             
-            # Try to find the three-dots menu
-            print("Looking for three-dots menu button...")
-            three_dots_button = None
-            
-            # Multiple approaches to find the three-dots button
+            # Try different approaches to find the three dots button
             try:
-                # Look for buttons with overflow icon or dropdown trigger classes
-                buttons = post.find_elements(By.XPATH, ".//button[contains(@class, 'artdeco-dropdown__trigger') or .//li-icon[contains(@type, 'overflow')] or .//span[@class='visually-hidden' and contains(text(), 'More actions')]]")
-                
-                if buttons:
-                    # Filter for visible buttons
-                    for button in buttons:
-                        if button.is_displayed():
-                            three_dots_button = button
-                            print("Found three-dots button that is displayed")
-                            break
-                            
-                # If still not found, try a more aggressive approach
-                if not three_dots_button:
-                    # Find all buttons in this post
-                    all_buttons = post.find_elements(By.TAG_NAME, "button")
-                    print(f"Found {len(all_buttons)} buttons in post")
-                    
-                    # Look for the last visible button, often the three-dots menu
-                    for button in reversed(all_buttons):
-                        if button.is_displayed():
-                            three_dots_button = button
-                            print("Using last visible button as three-dots menu")
-                            break
-            except Exception as e:
-                print(f"Error finding buttons: {e}")
-            
-            if not three_dots_button:
-                print("Could not find three-dots menu button - skipping post")
-                continue
-                
-            # Click the three-dots menu with ActionChains for better precision
-            print("Clicking three-dots menu...")
-            try:
-                actions.move_to_element(three_dots_button).pause(1).click().perform()
-                time.sleep(3)
-            except Exception as e:
-                print(f"Error clicking menu button: {e}")
-                # Try JavaScript click as fallback
-                try:
-                    driver.execute_script("arguments[0].click();", three_dots_button)
-                    print("Used JavaScript click as fallback")
-                    time.sleep(3)
-                except:
-                    print("JavaScript click failed too, skipping post")
-                    continue
-            
-            # Find the "Copy link" option
-            print("Looking for 'Copy link' option...")
-            try:
-                # Wait for dropdown menu to appear
-                dropdown = WebDriverWait(driver, 5).until(
-                    EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'artdeco-dropdown__content') or contains(@class, 'feed-shared-control-menu__content')]"))
-                )
-                
-                # Look for the copy link option using different approaches
-                copy_link_option = None
-                
-                # Try by text content first
-                link_options = dropdown.find_elements(By.XPATH, ".//li[contains(., 'Copy link') or contains(@aria-label, 'Copy link')]")
-                if link_options:
-                    copy_link_option = link_options[0]
-                    print("Found copy link option by text")
-                
-                # If not found, try by position (usually second option)
-                if not copy_link_option:
-                    all_options = dropdown.find_elements(By.XPATH, ".//li")
-                    if len(all_options) >= 2:
-                        copy_link_option = all_options[1]  # Second item is often Copy Link
-                        print("Using second menu option as copy link")
-                
-                if not copy_link_option:
-                    print("Could not find copy link option, skipping post")
-                    # Close dropdown by clicking elsewhere
-                    driver.execute_script("document.body.click();")
-                    time.sleep(1)
-                    continue
-                
-                # Click the copy link option with ActionChains
-                print("Clicking copy link option...")
-                actions.move_to_element(copy_link_option).pause(1).click().perform()
-                time.sleep(3)
-                
-                # Get the URL from clipboard
-                clipboard_before = pyperclip.paste()
-                print(f"Retrieved from clipboard: {clipboard_before}")
-                
-                # Verify this is a LinkedIn URL and we haven't seen it before
-                if "linkedin.com" in clipboard_before and clipboard_before not in collected_urls:
-                    collected_urls.add(clipboard_before)
-                    post_links.append(clipboard_before)
-                    print(f"Successfully extracted new URL: {clipboard_before}")
-                    processed_count += 1
-                else:
-                    print("URL already collected or not a LinkedIn URL - trying next post")
-                
-            except Exception as e:
-                print(f"Error with copy link option: {e}")
-            
-            # Always close any dropdown menu by clicking elsewhere
-            print("Closing dropdown menu...")
-            try:
-                driver.execute_script("document.body.click();")
-                time.sleep(2)
+                three_dots_button = post.find_element(By.XPATH, ".//button[contains(@class, 'artdeco-dropdown__trigger') or contains(@class, 'feed-shared-control-menu__trigger')]")
+                print(f"Found three-dots menu button using primary selector")
             except:
-                pass
+                try:
+                    # Try alternate approach - look for the SVG
+                    three_dots_button = post.find_element(By.XPATH, ".//button[.//li-icon[@type='overflow-web-ios']]")
+                    print(f"Found three-dots menu button using SVG selector")
+                except:
+                    # Try another alternate approach - any button with no text that might be a menu
+                    buttons = post.find_elements(By.XPATH, ".//button")
+                    three_dots_button = None
+                    for button in buttons:
+                        if not button.text and button.is_displayed():
+                            three_dots_button = button
+                            break
+                    
+                    if three_dots_button is None:
+                        print(f"Could not find three-dots menu button for post {i+1}")
+                        continue
+                    print(f"Found three-dots menu button using fallback method")
+            
+            print(f"Clicking three-dots menu...")
+            three_dots_button.click()
+            time.sleep(3)  # Increased delay after clicking
+            
+            # Find "Copy link to post" option - there are multiple approaches to find this
+            print(f"Looking for 'Copy link to post' option...")
+            try:
+                # Try first approach - by text content
+                copy_link_option = WebDriverWait(driver, 8).until(  # Increased timeout
+                    EC.element_to_be_clickable((By.XPATH, "//div[contains(@class, 'artdeco-dropdown__content')]//li[contains(., 'Copy link to post') or contains(., 'Copy link')]"))
+                )
+                print(f"Found 'Copy link to post' option by text content")
+            except:
+                try:
+                    # Try another approach - by aria-label
+                    copy_link_option = WebDriverWait(driver, 8).until(
+                        EC.element_to_be_clickable((By.XPATH, "//div[contains(@class, 'artdeco-dropdown__content')]//li[@aria-label='Copy link to post']"))
+                    )
+                    print(f"Found 'Copy link to post' option by aria-label")
+                except:
+                    # Alternative approach - by expected position in menu
+                    print(f"Trying to find 'Copy link' by menu position...")
+                    time.sleep(2)
+                    menu_options = driver.find_elements(By.XPATH, "//div[contains(@class, 'artdeco-dropdown__content')]//li")
+                    print(f"Found {len(menu_options)} menu options")
+                    
+                    if len(menu_options) >= 2:  # Assuming "Copy link" is usually the 2nd option
+                        copy_link_option = menu_options[1]
+                        print(f"Selected menu item at position 2")
+                    else:
+                        print(f"Not enough menu options found for post {i+1}")
+                        continue
+            
+            # Click the copy link option
+            print(f"Clicking 'Copy link to post' option...")
+            copy_link_option.click()
+            time.sleep(3)  # Increased delay after clicking
+            
+            # Since copying puts text in clipboard, get it from there
+            try:
+                post_url = pyperclip.paste()
+                print(f"Retrieved from clipboard: {post_url}")
+                
+                if "linkedin.com" in post_url:
+                    post_links.append(post_url)
+                    print(f"Successfully extracted URL for post {i+1}: {post_url}")
+                else:
+                    print(f"Clipboard content does not contain a LinkedIn URL: '{post_url}'")
+                    # Fallback: Try to extract post ID and build URL
+                    print(f"Trying fallback method to extract post URL...")
+                    post_id = post.get_attribute('data-urn') or post.get_attribute('data-id') or ""
+                    if post_id:
+                        print(f"Found post ID: {post_id}")
+                        # Extract the post ID if it's in a format like "urn:li:activity:7176301425224982528"
+                        post_id_parts = post_id.split(":")
+                        if len(post_id_parts) >= 3:
+                            constructed_url = f"https://www.linkedin.com/feed/update/urn:li:activity:{post_id_parts[-1]}"
+                            post_links.append(constructed_url)
+                            print(f"Successfully constructed URL for post {i+1}: {constructed_url}")
+                        else:
+                            print(f"Could not parse post ID format: {post_id}")
+                    else:
+                        print(f"Could not find post ID for post {i+1}")
+            except Exception as e:
+                print(f"Error extracting URL for post {i+1}: {e}")
+                
+            # Close any open dropdown menu by clicking elsewhere
+            print(f"Closing dropdown menu...")
+            driver.execute_script("document.body.click();")
+            time.sleep(3)  # Increased delay after closing dropdown
                 
         except Exception as e:
-            print(f"Error processing post: {e}")
-            
-        # Scroll a bit to reveal more posts if needed
-        if index % 3 == 0:
-            print("Scrolling to reveal more posts...")
-            driver.execute_script("window.scrollBy(0, 300);")
-            time.sleep(2)
+            print(f"Error processing post {i+1}: {e}")
     
     return post_links
 
-# Extract links for posts
+# Extract links for the first 10 posts
 print("\nStarting extraction of post links...")
 post_links = extract_post_links(10)
 
